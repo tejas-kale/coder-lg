@@ -25,6 +25,7 @@ This implementation uses:
 - LangGraph for the multi-agent orchestration
 - Large Language Models for code understanding and generation
 - Python for the core system
+- Docker containers for secure test execution
 
 ### Development Tools
 
@@ -32,21 +33,44 @@ This project was developed using:
 - [BetterDictation](https://betterdictation.com) - An offline speech-to-text tool that uses OpenAI's Whisper model for fast and accurate transcription
 - [Cursor](https://www.cursor.com) - An AI-powered code editor that enhances productivity through intelligent code completion and editing features
 
+## Getting Started
+
+### Prerequisites
+- Python 3.9 or higher
+- Docker installed and running
+- OpenAI API key
+
+### Installation
+1. Clone the repository
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+3. Copy `.env.example` to `.env` and fill in your API keys
+4. Ensure Docker daemon is running
+
 ## Project Status
 
 🚧 **Under Development** 🚧
 
 This is an active implementation project aiming to reproduce and potentially improve upon the results from the original paper.
 
-## Getting Started
-
-Instructions for setup and usage coming soon.
-
 ## Evaluation
 
 The system will be evaluated on:
 - SWE-bench lite
 - Other relevant software engineering benchmarks
+
+## Changelog
+
+### December 20, 2024
+- Initial implementation of three-agent system:
+  - Manager Agent for coordinating repairs
+  - Editor Agent for code modifications
+  - Verifier Agent for test execution
+- Added Docker-based secure test execution
+- Implemented floating-point comparison with tolerance
+- Added basic example with add() function repair
 
 ## Citation
 
