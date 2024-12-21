@@ -1,6 +1,9 @@
 """
-This script demonstrates a simple agent system using LangGraph.
-It includes a manager, editor, and verifier to fix a bug in a Python function.
+Multi-agent system for automated code repair using LangGraph.
+
+This module implements a three-agent system (Manager, Editor, Verifier) that works
+together to identify and fix bugs in Python code. The system uses LangGraph for
+agent orchestration and Docker for secure test execution.
 """
 
 import json
@@ -15,21 +18,10 @@ import docker
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from langgraph.graph import END, START, Graph, StateGraph
+from langgraph.graph import END, Graph, StateGraph
 
 # Load environment variables from .env file
 load_dotenv()
-
-
-# Validate required environment variables
-def validate_env_vars():
-    """Validate that all required environment variables are set."""
-    required_vars = {
-        "OPENAI_API_KEY": "OpenAI API key",
-    }
-
-    if not os.getenv("OPENAI_API_KEY"):
-        raise EnvironmentError("Missing OpenAI API key")
 
 
 # Initialize LLM without tracing
@@ -42,15 +34,13 @@ llm = ChatOpenAI(
 # Define message types for type safety
 class AgentState(TypedDict):
     """
-    Represents the state of an agent in the system.
-    In LangGraph, state is passed between nodes (agents) and must be immutable.
-    Each agent receives this state and returns a modified copy.
+    State object passed between agents in the LangGraph system.
 
     Attributes:
-        messages: List of conversation messages between agents
-        next_agent: Name of the next agent to handle the task (used for routing)
-        task_status: Current status of the task (PLANNING, EDITING, etc.)
-        code: Current state of the code being modified
+        messages (List[BaseMessage]): Conversation history between agents
+        next_agent (str): Identifier of the next agent to execute
+        task_status (str): Current status of the repair task
+        code (str): Current version of the code being modified
     """
 
     messages: List[BaseMessage]
@@ -79,11 +69,20 @@ class TaskStatus(str, Enum):
 
 def manager_agent(state: AgentState) -> AgentState:
     """
-    Manager agent that plans and coordinates tasks.
-    In LangGraph, each agent is a node in the graph that:
-    1. Receives the current state
-    2. Performs its task
-    3. Returns a new state with next_agent set for routing
+    Coordinate the code repair process and make decisions about next steps.
+
+    Args:
+        state: Current state of the agent system containing:
+            - messages: Conversation history
+            - code: Current code version
+            - task_status: Current repair status
+            - next_agent: Next agent to execute
+
+    Returns:
+        AgentState: Updated state with:
+            - New message added to history
+            - next_agent set to either "editor" or "END"
+            - task_status updated based on decision
     """
     messages = state["messages"]
 
@@ -131,7 +130,26 @@ def manager_agent(state: AgentState) -> AgentState:
 
 
 def editor_agent(state: AgentState) -> AgentState:
-    """Editor agent that implements code changes."""
+    """
+    Implement code changes based on manager's instructions.
+
+    Args:
+        state: Current state of the agent system containing:
+            - messages: Conversation history
+            - code: Current code version
+            - task_status: Current repair status
+            - next_agent: Next agent to execute
+
+    Returns:
+        AgentState: Updated state with:
+            - New message added to history
+            - Modified code in the code field
+            - next_agent set to "verifier"
+            - task_status set to VERIFYING
+
+    Note:
+        Extracts code from LLM response using regex pattern ```python...```
+    """
     messages = state["messages"]
 
     system_prompt = SystemMessage(
@@ -182,7 +200,23 @@ def editor_agent(state: AgentState) -> AgentState:
 def _generate_test_cases(
     code: str, context: str, llm_obj: ChatOpenAI
 ) -> List[Dict[str, Any]]:
-    """Generate test cases using LLM."""
+    """
+    Generate test cases for code verification using LLM.
+
+    Args:
+        code: Python code to test
+        context: Description of the issue or context for testing
+        llm_obj: Initialized ChatOpenAI instance for test generation
+
+    Returns:
+        List[Dict[str, Any]]: List of test cases, each containing:
+            - input_args: Arguments for the test
+            - expected: Expected output
+            - description: Test case description
+
+    Raises:
+        ValueError: If unable to generate valid test cases
+    """
     test_prompt = SystemMessage(
         content="""You are the Test Generator part of the Verifier agent.
             Given the code and context, generate comprehensive test cases.
@@ -228,7 +262,26 @@ def _generate_test_cases(
 def _run_docker_tests(
     code: str, test_cases: List[Dict[str, Any]], test_runner_path: pathlib.Path
 ) -> List[Dict[str, Any]]:
-    """Run tests in Docker container."""
+    """
+    Run test cases in an isolated Docker container.
+
+    Args:
+        code: String containing the Python code to test
+        test_cases: List of test case dictionaries
+        test_runner_path: Path to the test runner script
+
+    Returns:
+        List[Dict[str, Any]]: List of test results, each containing:
+            - input: String representation of the function call
+            - output: Actual output (if successful)
+            - expected: Expected output
+            - passed: Boolean indicating test status
+            - error: Error message (if test failed)
+
+    Raises:
+        docker.errors.ContainerError: If container execution fails
+        docker.errors.ImageNotFound: If Python Docker image is not found
+    """
     with (
         tempfile.NamedTemporaryFile(mode="w", suffix=".py") as code_file,
         tempfile.NamedTemporaryFile(mode="w", suffix=".json") as test_file,
@@ -277,7 +330,24 @@ def _run_docker_tests(
 
 
 def _format_verification_message(test_results: List[Dict[str, Any]]) -> str:
-    """Format test results into a readable message."""
+    """
+    Format test results into a human-readable message.
+
+    Args:
+        test_results: List of test result dictionaries, each containing:
+            - description: Test case description
+            - input: Function call representation
+            - output: Actual output (if successful)
+            - expected: Expected output
+            - passed: Boolean indicating test status
+            - error: Error message (if present)
+
+    Returns:
+        str: Formatted message containing:
+            - Overall pass/fail status
+            - Individual test results with inputs and outputs
+            - Error messages for failed tests
+    """
     verification_msg = "Code Verification Results:\n"
     all_passed = all(t.get("passed", False) for t in test_results)
     verification_msg += f"Overall Status: {'PASSED' if all_passed else 'FAILED'}\n\n"
@@ -300,7 +370,27 @@ def _format_verification_message(test_results: List[Dict[str, Any]]) -> str:
 
 
 def verifier_agent(state: AgentState) -> AgentState:
-    """Verifier agent that tests the code changes."""
+    """
+    Verify code changes by generating and running tests.
+
+    Args:
+        state: Current state of the agent system containing:
+            - messages: Conversation history
+            - code: Code to verify
+            - task_status: Current repair status
+            - next_agent: Next agent to execute
+
+    Returns:
+        AgentState: Updated state with:
+            - New message containing test results
+            - next_agent set to "manager"
+            - task_status set to PLANNING
+            - Original code preserved
+
+    Note:
+        Uses Docker for isolated test execution
+        Handles test failures gracefully with error messages
+    """
     messages = state["messages"]
     code = state["code"]
 
@@ -335,12 +425,14 @@ def verifier_agent(state: AgentState) -> AgentState:
 
 def _route_next(state: AgentState) -> Union[str, END]:
     """
-    Routing function for LangGraph edges.
-    LangGraph uses this to determine which node to visit next.
+    Determine the next agent to execute in the workflow.
+
+    Args:
+        state: Current agent state containing next_agent field
 
     Returns:
-        - A node name (str) to continue execution
-        - END to terminate the graph execution
+        Union[str, END]: Either the name of the next agent or END constant
+            to terminate execution
     """
     if state["next_agent"] == "END":
         return END
@@ -379,7 +471,20 @@ def create_agent_graph() -> Graph:
 
 
 def main():
-    """Main function to run the agent system."""
+    """
+    Main function to run the agent system.
+
+    This function initializes the LangGraph workflow, sets up the initial state,
+    and streams the execution of the graph. It handles the creation and compilation
+    of the agent graph, defines the initial code to fix, and creates the initial state.
+
+    It also handles the streaming of the execution of the graph, checking for the
+    manager's output to determine when the task is complete.
+
+    If an error occurs during execution, it prints the error message and raises an exception.
+
+    This function is the entry point for the agent system.
+    """
     try:
         # Create and compile the agent graph
         graph = create_agent_graph()
